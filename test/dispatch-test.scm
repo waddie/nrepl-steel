@@ -1,11 +1,11 @@
-;; Tests for steel/nrepl-server/dispatch.scm
+;; Tests for nrepl-server/dispatch.scm
 ;; Feeds synthetic request dicts through dispatch and asserts the response dicts.
 ;; Uses the real registry+evaluator (in-process, fast) so this also integration-tests
 ;; the dispatch -> session -> evaluator path at the dict level. No socket.
 (require "harness.scm")
-(require "../steel/nrepl-server/evaluator.scm")
-(require "../steel/nrepl-server/session.scm")
-(require "../steel/nrepl-server/dispatch.scm")
+(require "../nrepl-server/evaluator.scm")
+(require "../nrepl-server/session.scm")
+(require "../nrepl-server/dispatch.scm")
 
 (define reg (make-registry (make-standalone-evaluator)))
 

@@ -1,6 +1,6 @@
-;; Tests for steel/nrepl-server/bencode.scm
+;; Tests for nrepl-server/bencode.scm
 (require "harness.scm")
-(require "../steel/nrepl-server/bencode.scm")
+(require "../nrepl-server/bencode.scm")
 
 ;; --- encode: spec vectors --------------------------------------------------
 (check-equal? "enc string" (bencode-encode-string "spam") "4:spam")

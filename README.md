@@ -20,7 +20,7 @@ export PATH="$HOME/.steel/bin:$PATH"
 ```
 
 This makes `nrepl-steel` globally available as a command and lets any Scheme
-script load the server library with `(require "nrepl-steel/steel/nrepl-server/server.scm")`.
+script load the server library with `(require "nrepl-steel/nrepl-server/server.scm")`.
 
 ## Start a server
 

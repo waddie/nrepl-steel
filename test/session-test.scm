@@ -1,8 +1,8 @@
-;; Tests for steel/nrepl-server/session.scm + evaluator.scm
+;; Tests for nrepl-server/session.scm + evaluator.scm
 ;; Drives the evaluator directly — no transport, no sockets.
 (require "harness.scm")
-(require "../steel/nrepl-server/evaluator.scm")
-(require "../steel/nrepl-server/session.scm")
+(require "../nrepl-server/evaluator.scm")
+(require "../nrepl-server/session.scm")
 
 (define (fresh-registry) (make-registry (make-standalone-evaluator)))
 

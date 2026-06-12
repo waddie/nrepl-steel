@@ -1,7 +1,7 @@
-;; Tests for steel/nrepl-server/transport.scm
+;; Tests for nrepl-server/transport.scm
 ;; Exercised over in-memory bytevector ports — no socket needed at the unit level.
 (require "harness.scm")
-(require "../steel/nrepl-server/transport.scm")
+(require "../nrepl-server/transport.scm")
 
 ;; Write one message, read it back.
 (define (round-trip msg)

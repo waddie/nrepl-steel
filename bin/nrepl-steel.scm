@@ -2,7 +2,7 @@
 ;;
 ;;   nrepl-steel [host:port]     (default 127.0.0.1:7888)
 
-(require "nrepl-steel/steel/nrepl-server/server.scm")
+(require "nrepl-steel/nrepl-server/server.scm")
 (require-builtin steel/time)
 
 (define addr (if (>= (length (command-line)) 3)

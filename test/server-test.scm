@@ -1,4 +1,4 @@
-;; Tests for steel/nrepl-server/server.scm — the connection serve loop.
+;; Tests for nrepl-server/server.scm — the connection serve loop.
 ;;
 ;; This drives `serve-loop` over IN-MEMORY byte ports (a bytevector of pre-encoded
 ;; requests in, a capturing writer out) with the real registry / evaluator / dispatch.
@@ -13,10 +13,10 @@
 ;; standalone clone+eval-over-socket probes work. So socket-level verification is left
 ;; to the manual/Phase-7 external-client path; the suite tests the loop deterministically.
 (require "harness.scm")
-(require "../steel/nrepl-server/server.scm")
-(require "../steel/nrepl-server/session.scm")
-(require "../steel/nrepl-server/evaluator.scm")
-(require "../steel/nrepl-server/bencode.scm")
+(require "../nrepl-server/server.scm")
+(require "../nrepl-server/session.scm")
+(require "../nrepl-server/evaluator.scm")
+(require "../nrepl-server/bencode.scm")
 
 ;; Decode every bencode value from a bytevector into a list.
 (define (decode-all bv)

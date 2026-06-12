@@ -11,7 +11,7 @@
 ;; deadlock with the server on a tight request/response loop (in-process scheduling —
 ;; see test/server-test.scm). An external client is unaffected.
 
-(require "steel/nrepl-server/server.scm")
+(require "nrepl-server/server.scm")
 (require-builtin steel/time)
 
 (define (addr-from-args)

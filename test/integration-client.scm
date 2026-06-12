@@ -15,7 +15,7 @@
 ;; exits non-zero for the orchestrator.
 
 (require "harness.scm")
-(require "../steel/nrepl-server/transport.scm")
+(require "../nrepl-server/transport.scm")
 (require-builtin steel/tcp)
 
 (define (addr-from-args)
