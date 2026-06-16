@@ -5,7 +5,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 repository = "https://github.com/waddie/nrepl-steel"
 license = "MIT"
@@ -16,14 +16,14 @@ license = "MIT"
 # nrepl.hx locks to — that crate already loads cleanly into this steel.)
 steel-core = {
   git = "https://github.com/mattwparas/steel.git",
-  version = "0.8.2",
   rev = "363768e23f58b7212b12b6e0e903887f9aa631cf",
+  version = "0.8.2",
   features = ["dylibs", "sync"]
 }
 steel-derive = {
   git = "https://github.com/mattwparas/steel.git",
-  version = "0.8.2",
-  rev = "363768e23f58b7212b12b6e0e903887f9aa631cf"
+  rev = "363768e23f58b7212b12b6e0e903887f9aa631cf",
+  version = "0.8.2"
 }
 
 [profile.release]

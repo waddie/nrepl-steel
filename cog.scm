@@ -12,7 +12,7 @@
 ;;; (#%require-dylib "libnrepl_steel_engine" ...).
 
 (define package-name 'nrepl-steel)
-(define version "0.2.0")
+(define version "0.2.1")
 
 ;; No pure-Scheme dependencies — the evaluation backend is the native dylib below.
 (define dependencies '())
@@ -31,16 +31,16 @@
      ((#:platform
        "aarch64-macos"
        #:url
-       "https://github.com/waddie/nrepl-steel/releases/download/v0.2.0/libnrepl_steel_engine-aarch64-macos.dylib")
+       "https://github.com/waddie/nrepl-steel/releases/download/v0.2.1/libnrepl_steel_engine-aarch64-macos.dylib")
       (#:platform
        "x86_64-macos"
        #:url
-       "https://github.com/waddie/nrepl-steel/releases/download/v0.2.0/libnrepl_steel_engine-x86_64-macos.dylib")
+       "https://github.com/waddie/nrepl-steel/releases/download/v0.2.1/libnrepl_steel_engine-x86_64-macos.dylib")
       (#:platform
        "x86_64-linux"
        #:url
-       "https://github.com/waddie/nrepl-steel/releases/download/v0.2.0/libnrepl_steel_engine-x86_64-linux.so")
+       "https://github.com/waddie/nrepl-steel/releases/download/v0.2.1/libnrepl_steel_engine-x86_64-linux.so")
       (#:platform
        "x86_64-windows"
        #:url
-       "https://github.com/waddie/nrepl-steel/releases/download/v0.2.0/nrepl_steel_engine-x86_64-windows.dll")))))
+       "https://github.com/waddie/nrepl-steel/releases/download/v0.2.1/nrepl_steel_engine-x86_64-windows.dll")))))

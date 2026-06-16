@@ -135,7 +135,7 @@ impl SteelEngine {
         let mut engine = self.inner.lock().unwrap();
         let value = engine.extract_value(&sym).ok()?;
         let ty = type_of(&value);
-        let doc = engine.get_doc_for_identifier(&sym).unwrap_or_default();
+        let doc = doc_for(&mut engine, &value);
         let arglist = match engine.call_function_by_name_with_args("arity?", vec![value]) {
             Ok(SteelVal::IntV(n)) if n >= 0 => Some(synth_arglist(n as usize)),
             _ => None,
@@ -176,6 +176,37 @@ fn type_of(value: &SteelVal) -> &'static str {
 fn synth_arglist(n: usize) -> String {
     let args = vec!["_"; n].join(" ");
     format!("({args})")
+}
+
+/// The docstring for `value`, or "" if none.
+///
+/// Deliberately does NOT use `Engine::get_doc_for_identifier`. That routes through
+/// `Compiler::get_doc`, which walks the builtin-module map and unconditionally
+/// returns when it reaches the `steel/meta` module — so a native builtin whose doc
+/// lives in a module ordered *after* `steel/meta` is never found. Module order is a
+/// `HashMap` iteration order seeded fresh per `Engine` (i.e. per process), so the
+/// same symbol's doc appears or vanishes from one server startup to the next.
+///
+/// Instead we query the two order-independent sources Steel's own `help` uses:
+///   1. `#%native-fn-ptr-doc->string` — native builtins' metadata (FuncV/MutFunc/
+///      BuiltIn); returns #f for closures.
+///   2. `#%function-ptr-table-get` on `#%function-ptr-table` — the closure-id table
+///      that holds docs for Scheme closures defined with `@doc` (stdlib `map`/
+///      `filter`/… and user definitions).
+fn doc_for(engine: &mut Engine, value: &SteelVal) -> String {
+    if let Ok(SteelVal::StringV(s)) =
+        engine.call_function_by_name_with_args("#%native-fn-ptr-doc->string", vec![value.clone()])
+    {
+        return s.to_string();
+    }
+    if let Ok(table) = engine.extract_value("#%function-ptr-table") {
+        if let Ok(SteelVal::StringV(s)) = engine
+            .call_function_by_name_with_args("#%function-ptr-table-get", vec![table, value.clone()])
+        {
+            return s.to_string();
+        }
+    }
+    String::new()
 }
 
 /// Pull `(out err)` out of the `DRAIN_RESET` program's result list.
@@ -296,9 +327,10 @@ mod tests {
         let info = e.symbol_info("map".to_string()).expect("map is bound");
         assert_eq!(field(&info, "name"), "map");
         assert_eq!(field(&info, "type"), "function");
-        assert!(e
-            .symbol_info("definitely-not-bound-xyz".to_string())
-            .is_none());
+        assert!(
+            e.symbol_info("definitely-not-bound-xyz".to_string())
+                .is_none()
+        );
     }
 
     #[test]
@@ -307,5 +339,30 @@ mod tests {
         e.eval("(define (g a b) (+ a b))".to_string());
         let info = e.symbol_info("g".to_string()).expect("g is bound");
         assert_eq!(field(&info, "arglists-str"), "(_ _)");
+    }
+
+    #[test]
+    fn doc_is_present_for_all_symbol_classes() {
+        // `append` is a native builtin whose doc lives in a builtin module; under
+        // the old `get_doc_for_identifier` path it was found only when its module
+        // happened to sort before `steel/meta` in the per-engine HashMap order, so
+        // it vanished on ~1 in 5 fresh processes. `map` is a Scheme closure whose
+        // doc lives in the function-ptr table, and `gg` is a user `@doc` define.
+        // `doc_for` must find all three regardless of module iteration order.
+        let e = SteelEngine::new();
+        let append = e
+            .symbol_info("append".to_string())
+            .expect("append is bound");
+        assert!(
+            field(&append, "doc").contains("Appends"),
+            "native builtin doc missing: {:?}",
+            field(&append, "doc")
+        );
+        let map = e.symbol_info("map".to_string()).expect("map is bound");
+        assert!(!field(&map, "doc").is_empty(), "scheme builtin doc missing");
+
+        e.eval("(@doc \"user docstring\" (define (gg x) x))".to_string());
+        let gg = e.symbol_info("gg".to_string()).expect("gg is bound");
+        assert_eq!(field(&gg, "doc"), "user docstring");
     }
 }
