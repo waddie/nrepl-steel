@@ -199,12 +199,11 @@ fn doc_for(engine: &mut Engine, value: &SteelVal) -> String {
     {
         return s.to_string();
     }
-    if let Ok(table) = engine.extract_value("#%function-ptr-table") {
-        if let Ok(SteelVal::StringV(s)) = engine
+    if let Ok(table) = engine.extract_value("#%function-ptr-table")
+        && let Ok(SteelVal::StringV(s)) = engine
             .call_function_by_name_with_args("#%function-ptr-table-get", vec![table, value.clone()])
-        {
-            return s.to_string();
-        }
+    {
+        return s.to_string();
     }
     String::new()
 }
