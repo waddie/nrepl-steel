@@ -1,19 +1,25 @@
 ;; evaluator.scm — the evaluation seam.
 ;;
-;; Evaluation is a single indirection so the rest of the server (bencode / transport /
-;; session / dispatch) never knows how code is actually run. An Evaluator is three
-;; procedures:
+;; Evaluation (and symbol introspection) is a single indirection so the rest of the
+;; server (bencode / transport / session / dispatch) never knows how code is actually
+;; run. An Evaluator is five procedures:
 ;;
-;;   init  : () -> state            ;; create a fresh isolated session backend
-;;   eval  : state, code -> result  ;; run code, return a result hash (below)
-;;   close : state -> void          ;; tear the backend down
+;;   init     : () -> state              ;; create a fresh isolated session backend
+;;   eval     : state, code -> result    ;; run code, return a result hash (below)
+;;   close    : state -> void            ;; tear the backend down
+;;   complete : state, prefix -> pairs   ;; readable globals matching prefix:
+;;                                        ;; a list of (name type) two-element lists
+;;   info     : state, sym -> info|#f    ;; symbol metadata: a string->string hash
+;;                                        ;; (name/type/doc + arglists*), or #f if unbound
 ;;
-;; Stage one ships the *standalone* backend: one Steel (Engine::new) per session,
-;; evaluated with run!, with the mandatory per-session output-capture prelude. A future
-;; Helix backend would swap in init/eval/close that marshal onto the editor loop —
-;; nothing else changes.
+;; The backend is the native `nrepl-steel-engine` dylib: one Steel engine per session, owned
+;; by Rust. steel-core's own (Engine::new)/run! values can't be introspected from a
+;; dylib (EngineWrapper is pub(crate)) and the global symbol table needed for
+;; completions has no Scheme-level accessor — so the dylib owns the engines and exposes
+;; eval + globals + symbol-info over the FFI. A future Helix backend would swap in
+;; init/eval/close/complete/info that marshal onto the editor loop; nothing else changes.
 ;;
-;; A result hash has:
+;; A result hash (from `eval`) has:
 ;;   'status : 'ok | 'error
 ;;   'value  : list of rendered value strings (one per evaluated form; void results
 ;;             — definitions, side effects — are dropped)
@@ -21,71 +27,40 @@
 ;;   'err    : captured stderr (string, possibly "")
 ;;   'ex     : exception text when 'status is 'error, else #f
 
-(require "steel/result")
+;; The native session-engine backend. Installed in $STEEL_HOME/native as
+;; libnrepl_steel_engine.{dylib,so,dll}; built from crates/nrepl-steel-engine (see build.sh).
+(#%require-dylib "libnrepl_steel_engine"
+  (only-in engine/new engine/eval engine/globals engine/symbol-info engine/close))
 
 (provide Evaluator Evaluator? Evaluator-init Evaluator-eval Evaluator-close
-  make-standalone-evaluator)
+  Evaluator-complete
+  Evaluator-info
+  make-native-evaluator)
 
-(struct Evaluator (init eval close))
+(struct Evaluator (init eval close complete info))
 
-;; --- standalone backend: a child engine per session ------------------------
+;; --- native backend --------------------------------------------------------
 
-;; Install the capture prelude once, at session creation. This is MANDATORY — without
-;; it, evaluated output leaks to the server's own stdout (see spike-output-capture.md).
-;; The current-port parameter bindings persist across run! calls.
-(define (install-capture-prelude! e)
-  (run! e "(define __out (open-output-string))")
-  (run! e "(define __err (open-output-string))")
-  (run! e "(current-output-port __out)")
-  (run! e "(current-error-port __err)")
-  e)
+;; engine/eval returns a string-keyed hash (FFI hashes use string keys). Translate it
+;; into the seam's symbol-keyed result so dispatch is unchanged.
+(define (native-result->seam h)
+  (hash 'status
+    (if (equal? (hash-ref h "status") "ok") 'ok 'error)
+    'value
+    (hash-ref h "values")
+    'out
+    (hash-ref h "out")
+    'err
+    (hash-ref h "err")
+    'ex
+    (let ([e (hash-ref h "ex")]) (if (string? e) e #f))))
 
-;; Drain a capture port to a string (its run! result is a one-element list).
-(define (drain! e name)
-  (car (unwrap-ok (run! e (string-append "(get-output-string " name ")")))))
-
-;; Recreate a capture port after draining — draining does NOT clear it, so without a
-;; reset, output would accumulate across evals.
-(define (reset-port! e var current-port-fn)
-  (run! e (string-append "(set! " var " (open-output-string))"))
-  (run! e (string-append "(" current-port-fn " " var ")")))
-
-(define (void-render? s) (equal? s "#<void>"))
-
-(define (standalone-eval e code)
-  ;; run! maps user code to (Ok values) / (Err error). A throw from run! itself
-  ;; (e.g. a read/compile failure surfaced as an exception) is folded into an Err so
-  ;; the ports still get drained and reset below.
-  (define r (with-handler (lambda (err) (Err err)) (run! e code)))
-  (define out (drain! e "__out"))
-  (define err (drain! e "__err"))
-  (reset-port! e "__out" "current-output-port")
-  (reset-port! e "__err" "current-error-port")
-  (if (Ok? r)
-    (hash 'status 'ok
-      'value
-      (filter (lambda (s) (not (void-render? s)))
-        (map value->string (unwrap-ok r)))
-      'out
-      out
-      'err
-      err
-      'ex
-      #f)
-    (hash 'status 'error
-      'value
-      '()
-      'out
-      out
-      'err
-      err
-      'ex
-      (value->string (unwrap-err r)))))
-
-(define (make-standalone-evaluator)
+(define (make-native-evaluator)
   (Evaluator
-    (lambda () (install-capture-prelude! (Engine::new)))
-    standalone-eval
-    ;; Dropping the registry's reference to the engine is enough for it to be reclaimed
-    ;; (Steel is reference-counted); nothing extra to release for the standalone backend.
-    (lambda (e) void)))
+    engine/new
+    (lambda (e code) (native-result->seam (engine/eval e code)))
+    engine/close
+    ;; complete: the readable globals matching `prefix`, as (name type) pairs.
+    engine/globals
+    ;; info: a string->string metadata hash, or #f when the symbol is unbound.
+    engine/symbol-info))

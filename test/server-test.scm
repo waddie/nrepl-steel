@@ -47,7 +47,7 @@
   (filter (lambda (r) (equal? (hash-try-get r "id") id)) resps))
 
 ;; Pre-create a session so requests can reference its id (clone's id is generated).
-(define reg (make-registry (make-standalone-evaluator)))
+(define reg (make-registry (make-native-evaluator)))
 (define sid (registry-clone! reg))
 
 (define R

@@ -7,7 +7,7 @@
 (require "../nrepl-server/session.scm")
 (require "../nrepl-server/dispatch.scm")
 
-(define reg (make-registry (make-standalone-evaluator)))
+(define reg (make-registry (make-native-evaluator)))
 
 ;; --- helpers ---------------------------------------------------------------
 (define (last-of xs) (if (null? (cdr xs)) (car xs) (last-of (cdr xs))))
@@ -89,6 +89,49 @@
 (define ls (dispatch reg (hash "op" "ls-sessions" "id" "7")))
 (check-true "ls-sessions: lists the open session"
   (and (member sid (hash-ref (car ls) "sessions")) #t))
+
+;; --- completions -----------------------------------------------------------
+;; sid has lf-a (from load-file) defined; a "lf" prefix must surface it.
+(define cmp (dispatch reg (hash "op" "completions" "id" "c1" "session" sid "prefix" "lf")))
+(check-true "completions: done" (has-token? cmp "done"))
+(check-true "completions: candidate dicts carry candidate + type"
+  (let ([cands (hash-ref (car cmp) "completions")])
+    (and (list? cands)
+      (> (length cands) 0)
+      (hash-contains? (car cands) "candidate")
+      (hash-contains? (car cands) "type"))))
+(check-true "completions: lf-a is among the candidates"
+  (let ([names (map (lambda (c) (hash-ref c "candidate")) (hash-ref (car cmp) "completions"))])
+    (and (member "lf-a" names) #t)))
+(check-true "completions: no session -> error"
+  (has-token? (dispatch reg (hash "op" "completions" "id" "c2" "prefix" "x")) "error"))
+(check-true "completions: unknown session -> error"
+  (has-token? (dispatch reg (hash "op" "completions" "id" "c3" "session" "nope" "prefix" "x"))
+    "error"))
+
+;; --- lookup / info ---------------------------------------------------------
+(define lk (dispatch reg (hash "op" "lookup" "id" "k1" "session" sid "sym" "map")))
+(check-true "lookup: done" (has-token? lk "done"))
+(check-true "lookup: info dict with name"
+  (let ([info (hash-ref (car lk) "info")])
+    (and (hash? info) (equal? (hash-ref info "name") "map"))))
+(check-true "lookup: info has a doc string"
+  (string? (hash-ref (hash-ref (car lk) "info") "doc")))
+(check-true "info op is an alias for lookup"
+  (has-token? (dispatch reg (hash "op" "info" "id" "k2" "session" sid "sym" "map")) "done"))
+(check-true "lookup: unbound symbol -> no-info"
+  (has-token? (dispatch reg (hash "op" "lookup" "id" "k3" "session" sid "sym" "totally-unbound-xyz"))
+    "no-info"))
+(check-true "lookup: missing sym -> error"
+  (has-token? (dispatch reg (hash "op" "lookup" "id" "k4" "session" sid)) "error"))
+(check-true "lookup: unknown session -> error"
+  (has-token? (dispatch reg (hash "op" "lookup" "id" "k5" "session" "nope" "sym" "map")) "error"))
+
+;; describe now advertises the new ops
+(check-true "describe: advertises completions + lookup + info"
+  (let ([ops (hash-ref (car desc) "ops")])
+    (and (hash-contains? ops "completions") (hash-contains? ops "lookup")
+      (hash-contains? ops "info"))))
 
 ;; --- interrupt (queued-only; idle in synchronous registry) -----------------
 (check-true "interrupt: idle session"

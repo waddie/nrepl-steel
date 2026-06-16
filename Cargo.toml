@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/nrepl-steel-engine",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+repository = "https://github.com/waddie/nrepl-steel"
+license = "MIT"
+
+[workspace.dependencies]
+# Steel FFI. Pinned to the exact git rev the installed `steel 0.8.2` was built
+# from, so the abi_stable dylib boundary matches the host runtime. (Same rev
+# nrepl.hx locks to — that crate already loads cleanly into this steel.)
+steel-core = {
+  git = "https://github.com/mattwparas/steel.git",
+  version = "0.8.2",
+  rev = "363768e23f58b7212b12b6e0e903887f9aa631cf",
+  features = ["dylibs", "sync"]
+}
+steel-derive = {
+  git = "https://github.com/mattwparas/steel.git",
+  version = "0.8.2",
+  rev = "363768e23f58b7212b12b6e0e903887f9aa631cf"
+}
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true

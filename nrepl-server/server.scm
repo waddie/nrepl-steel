@@ -29,7 +29,7 @@
 (struct Server (addr listener registry running) #:mutable)
 
 (define (make-server addr)
-  (Server addr #f (make-registry (make-standalone-evaluator)) #f))
+  (Server addr #f (make-registry (make-native-evaluator)) #f))
 
 (define (server-addr s) (Server-addr s))
 (define (server-registry s) (Server-registry s))

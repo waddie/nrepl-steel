@@ -23,7 +23,10 @@
 
 ;; The ops this server advertises (and answers). Anything else -> unknown-op.
 (define server-ops
-  (list "clone" "describe" "eval" "load-file" "close" "ls-sessions" "interrupt"))
+  (list "clone" "describe" "eval" "load-file" "close" "ls-sessions" "interrupt"
+    "completions"
+    "lookup"
+    "info"))
 
 (define (dispatch reg req)
   (define op (hash-try-get req "op"))
@@ -35,6 +38,10 @@
     [(equal? op "close") (op-close reg req)]
     [(equal? op "ls-sessions") (op-ls-sessions reg req)]
     [(equal? op "interrupt") (op-interrupt reg req)]
+    [(equal? op "completions") (op-completions reg req)]
+    ;; `lookup` (nREPL) and `info` (cider) are the same symbol-metadata query.
+    [(equal? op "lookup") (op-lookup reg req)]
+    [(equal? op "info") (op-lookup reg req)]
     [else (op-unknown reg req)]))
 
 ;; --- response construction -------------------------------------------------
@@ -68,12 +75,18 @@
     "ls-sessions"
     (hash)
     "interrupt"
+    (hash)
+    "completions"
+    (hash)
+    "lookup"
+    (hash)
+    "info"
     (hash)))
 
 ;; versions: a map of name -> {string -> string} (Q4 — the client only needs the
 ;; type to fit; values are informational).
 (define describe-versions
-  (hash "nrepl-steel" (hash "version-string" "0.1.0")
+  (hash "nrepl-steel" (hash "version-string" "0.2.0")
     "steel"
     (hash "version-string" "0.8.2")))
 
@@ -134,6 +147,40 @@
 
 (define (op-ls-sessions reg req)
   (list (respond req (hash "sessions" (registry-ids reg) "status" (done-status)))))
+
+;; completions: enumerate the session engine's readable globals matching `prefix`.
+;; Response field `completions` is a list of dicts, each with `candidate` (the name)
+;; and `type` ("function"/"value"). Steel has no namespaces, so `ns` is omitted.
+;; An absent/empty prefix lists everything bound in the session.
+(define (op-completions reg req)
+  (define session (hash-try-get req "session"))
+  (define prefix (or (hash-try-get req "prefix") ""))
+  (cond
+    [(not session) (list (respond req (hash "status" (done-status "error" "no-session"))))]
+    [(not (registry-get reg session))
+      (list (respond req (hash "status" (done-status "error" "unknown-session"))))]
+    [else
+      (define candidates
+        (map (lambda (pair) (hash "candidate" (car pair) "type" (car (cdr pair))))
+          (registry-complete reg session prefix)))
+      (list (respond req (hash "completions" candidates "status" (done-status))))]))
+
+;; lookup/info: symbol metadata for `sym` in the session. The backend returns a
+;; string->string hash (name/type/doc + arglists-str/arglists) ready to be the
+;; response `info` field; an unbound symbol yields the `no-info` status token.
+(define (op-lookup reg req)
+  (define session (hash-try-get req "session"))
+  (define sym (hash-try-get req "sym"))
+  (cond
+    [(not session) (list (respond req (hash "status" (done-status "error" "no-session"))))]
+    [(not sym) (list (respond req (hash "status" (done-status "error" "no-symbol"))))]
+    [(not (registry-get reg session))
+      (list (respond req (hash "status" (done-status "error" "unknown-session"))))]
+    [else
+      (define info (registry-info reg session sym))
+      (if info
+        (list (respond req (hash "info" info "status" (done-status))))
+        (list (respond req (hash "status" (done-status "no-info")))))]))
 
 ;; Interrupt is queued-only/best-effort (Phase 1 finding). In the synchronous registry
 ;; there is no in-flight eval to cancel, so a known session is reported idle. The

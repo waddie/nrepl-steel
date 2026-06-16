@@ -17,6 +17,8 @@
   registry-clone!
   registry-get
   registry-eval
+  registry-complete
+  registry-info
   registry-close!
   registry-ids
   Session?
@@ -64,6 +66,20 @@
   (define s (registry-get reg id))
   (unless s (error "registry-eval: unknown session" id))
   ((Evaluator-eval (Registry-evaluator reg)) (Session-state s) code))
+
+;; Completion candidates for `prefix` in session `id`: a list of (name type) pairs.
+;; Raises if the session is unknown, like registry-eval.
+(define (registry-complete reg id prefix)
+  (define s (registry-get reg id))
+  (unless s (error "registry-complete: unknown session" id))
+  ((Evaluator-complete (Registry-evaluator reg)) (Session-state s) prefix))
+
+;; Symbol metadata for `sym` in session `id`: a string->string hash, or #f if unbound.
+;; Raises if the session is unknown.
+(define (registry-info reg id sym)
+  (define s (registry-get reg id))
+  (unless s (error "registry-info: unknown session" id))
+  ((Evaluator-info (Registry-evaluator reg)) (Session-state s) sym))
 
 ;; Close session `id`. Returns #t if it existed, #f otherwise.
 (define (registry-close! reg id)

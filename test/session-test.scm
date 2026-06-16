@@ -4,7 +4,7 @@
 (require "../nrepl-server/evaluator.scm")
 (require "../nrepl-server/session.scm")
 
-(define (fresh-registry) (make-registry (make-standalone-evaluator)))
+(define (fresh-registry) (make-registry (make-native-evaluator)))
 
 ;; --- basic value evaluation ------------------------------------------------
 (define reg (fresh-registry))

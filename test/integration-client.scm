@@ -93,6 +93,23 @@
 (check-true "ls-sessions: lists our session"
   (and (member sid (hash-ref (car ls) "sessions")) #t))
 
+;; --- completions (over the wire: list of candidate dicts) ------------------
+(define cmp (req! rd wr (hash "op" "completions" "id" "c1" "session" sid "prefix" "from-")))
+(check-true "completions: from-file is a candidate"
+  (let ([names (map (lambda (c) (hash-ref c "candidate")) (hash-ref (car cmp) "completions"))])
+    (and (member "from-file" names) #t)))
+(check-true "completions: candidates carry a type"
+  (hash-contains? (car (hash-ref (car cmp) "completions")) "type"))
+
+;; --- lookup / info (over the wire: nested info dict) -----------------------
+(define lk (req! rd wr (hash "op" "lookup" "id" "k1" "session" sid "sym" "map")))
+(check-true "lookup: info dict names the symbol"
+  (equal? (hash-ref (hash-ref (car lk) "info") "name") "map"))
+(check-true "lookup: info carries a doc string"
+  (string? (hash-ref (hash-ref (car lk) "info") "doc")))
+(define lku (req! rd wr (hash "op" "lookup" "id" "k2" "session" sid "sym" "no-such-symbol-xyz")))
+(check-true "lookup: unbound symbol -> no-info" (has-token? lku "no-info"))
+
 ;; --- interrupt (queued-only: an idle session reports session-idle) ---------
 (define intr (req! rd wr (hash "op" "interrupt" "id" "10" "session" sid)))
 (check-true "interrupt: idle session" (has-token? intr "session-idle"))

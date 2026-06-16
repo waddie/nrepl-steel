@@ -1,0 +1,17 @@
+[package]
+name = "nrepl-steel-engine"
+version.workspace = true
+edition.workspace = true
+description = "Steel FFI dylib: per-session Steel engines for the nrepl-steel server"
+repository.workspace = true
+license.workspace = true
+
+[lib]
+# cdylib for Steel's (#%require-dylib ...) loader; rlib so the unit tests can
+# link the crate directly.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+abi_stable = "0.11"
+steel-core = { workspace = true }
+steel-derive = { workspace = true }

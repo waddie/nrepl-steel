@@ -5,6 +5,11 @@
 # hang (which would otherwise wedge on Steel's join-threads-at-shutdown behaviour).
 set -e
 cd "$(dirname "$0")"
+
+# The evaluation backend is the native nrepl-steel-engine dylib; the Scheme suite loads
+# it via (#%require-dylib ...). Build + install it first (debug = fast compile).
+./build.sh --debug
+
 if command -v timeout >/dev/null 2>&1; then
   exec timeout 120 steel test/run-tests.scm
 elif command -v gtimeout >/dev/null 2>&1; then
