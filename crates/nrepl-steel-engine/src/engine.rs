@@ -100,14 +100,14 @@ impl SteelEngine {
     /// The readable globals whose names start with `prefix`, each as a
     /// `(name type)` pair. Enumerating the global symbol table is the one
     /// capability with no Scheme-level equivalent — the reason this dylib exists.
-    pub fn globals(&self, prefix: String) -> Vec<FFIValue> {
+    pub fn globals(&self, prefix: &str) -> Vec<FFIValue> {
         let engine = self.inner.lock().unwrap();
         let mut pairs: Vec<(String, &'static str)> = engine
             .readable_globals(0)
             .iter()
             .filter_map(|g| {
                 let name = g.resolve();
-                if name.starts_with(&prefix) {
+                if name.starts_with(prefix) {
                     let ty = engine
                         .extract_value(name)
                         .ok()
@@ -137,7 +137,7 @@ impl SteelEngine {
         let ty = type_of(&value);
         let doc = doc_for(&mut engine, &value);
         let arglist = match engine.call_function_by_name_with_args("arity?", vec![value]) {
-            Ok(SteelVal::IntV(n)) if n >= 0 => Some(synth_arglist(n as usize)),
+            Ok(SteelVal::IntV(n)) => usize::try_from(n).ok().map(synth_arglist),
             _ => None,
         };
 
@@ -154,7 +154,9 @@ impl SteelEngine {
 
     /// Explicit teardown hook. Dropping the engine (when the registry releases its
     /// reference) is what actually reclaims it; this exists so the seam's `close`
-    /// has something to call.
+    /// has something to call. Takes `&self` because the FFI registers it as a
+    /// method on the engine value; the empty body is the point.
+    #[allow(clippy::unused_self)]
     pub fn close(&self) {}
 }
 
@@ -189,7 +191,7 @@ fn synth_arglist(n: usize) -> String {
 ///
 /// Instead we query the two order-independent sources Steel's own `help` uses:
 ///   1. `#%native-fn-ptr-doc->string` — native builtins' metadata (FuncV/MutFunc/
-///      BuiltIn); returns #f for closures.
+///      `BuiltIn`); returns #f for closures.
 ///   2. `#%function-ptr-table-get` on `#%function-ptr-table` — the closure-id table
 ///      that holds docs for Scheme closures defined with `@doc` (stdlib `map`/
 ///      `filter`/… and user definitions).
@@ -307,7 +309,7 @@ mod tests {
         let e = SteelEngine::new();
         e.eval("(define foobar 1)".to_string());
         let names: Vec<String> = e
-            .globals("fooba".to_string())
+            .globals("fooba")
             .into_iter()
             .map(|v| match v {
                 FFIValue::Vector(pair) => match &pair[0] {
