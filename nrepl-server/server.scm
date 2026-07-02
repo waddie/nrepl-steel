@@ -24,7 +24,13 @@
 (require "evaluator.scm")
 (require-builtin steel/tcp)
 
-(provide make-server server-start! server-stop! server-addr server-registry serve-loop)
+(provide make-server
+  server-start!
+  server-stop!
+  server-addr
+  server-registry
+  serve-loop
+  server-error-response)
 
 (struct Server (addr listener registry running) #:mutable)
 
@@ -44,11 +50,15 @@
 
 ;; Stop accepting: clear the flag, then self-connect to wake the blocked tcp-accept so
 ;; the loop observes the flag and returns. Live connection threads end when their
-;; clients disconnect (read -> eof).
+;; clients disconnect (read -> eof). steel/tcp has no listener-close primitive
+;; (tcp-shutdown! is stream-only), so the best we can do is drop our reference: the
+;; underlying socket closes when the listener value is reclaimed, so the port may stay
+;; bound briefly after stop.
 (define (server-stop! server)
   (set-Server-running! server #f)
   (with-handler (lambda (e) void)
     (let ([c (tcp-connect (Server-addr server))]) (tcp-shutdown! c)))
+  (set-Server-listener! server #f)
   void)
 
 (define (accept-loop server)
@@ -94,7 +104,11 @@
         (for-each write! (dispatch registry req)))
       (serve-loop reader write! registry)]))
 
+;; Echo id and session (when the request carried them) so the client can route and
+;; attribute the failure, mirroring dispatch's `respond`.
 (define (server-error-response req err)
   (define id (and (hash? req) (hash-try-get req "id")))
+  (define session (and (hash? req) (hash-try-get req "session")))
   (define base (hash "status" (list "error" "server-error" "done") "ex" (value->string err)))
-  (if id (hash-insert base "id" id) base))
+  (define with-id (if id (hash-insert base "id" id) base))
+  (if session (hash-insert with-id "session" session) with-id))

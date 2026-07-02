@@ -6,6 +6,7 @@
 (require "../nrepl-server/evaluator.scm")
 (require "../nrepl-server/session.scm")
 (require "../nrepl-server/dispatch.scm")
+(require "../nrepl-server/version.scm")
 
 (define reg (make-registry (make-native-evaluator)))
 
@@ -41,6 +42,11 @@
 (check-true "describe: advertises load-file"
   (hash-contains? (hash-ref (car desc) "ops") "load-file"))
 (check-true "describe: has versions" (hash-contains? (car desc) "versions"))
+;; Guards the version.scm require wiring — describe must report the single-sourced
+;; version, not a literal that can drift.
+(check-equal? "describe: nrepl-steel version-string is single-sourced"
+  (hash-ref (hash-ref (hash-ref (car desc) "versions") "nrepl-steel") "version-string")
+  nrepl-steel-version)
 (check-true "describe: done" (has-token? desc "done"))
 
 ;; --- eval: value -----------------------------------------------------------
@@ -140,6 +146,9 @@
 (check-true "interrupt: unknown session -> error"
   (has-token? (dispatch reg (hash "op" "interrupt" "id" "8b" "session" "nope"))
     "error"))
+(check-true "interrupt: no session -> error"
+  (let ([resps (dispatch reg (hash "op" "interrupt" "id" "8c"))])
+    (and (has-token? resps "error") (has-token? resps "no-session"))))
 
 ;; --- close ----------------------------------------------------------------
 (check-true "close: done" (has-token? (dispatch reg (hash "op" "close" "id" "9" "session" sid))

@@ -85,3 +85,11 @@
         [n (box 0)])
     (serve-loop reader (lambda (m) (set-box! n (+ 1 (unbox n)))) reg)
     #t))
+
+;; The handler-bug fallback response echoes id and session so the client can route it.
+(define srv-err
+  (server-error-response (hash "op" "eval" "id" "e1" "session" "s-9") "boom"))
+(check-equal? "server-error-response echoes id" (hash-ref srv-err "id") "e1")
+(check-equal? "server-error-response echoes session" (hash-ref srv-err "session") "s-9")
+(check-true "server-error-response carries server-error status"
+  (and (member "server-error" (hash-ref srv-err "status")) #t))

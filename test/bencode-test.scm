@@ -53,6 +53,9 @@
 ;; a representative nREPL eval response with a list status
 (check-true "rt nrepl eval resp"
   (round-trips? (hash "id" "1" "session" "abc-123" "value" "3" "status" (list "done"))))
+;; a multi-KB string body (exercises the bytevector accumulator in the decoder)
+(check-true "rt multi-KB string"
+  (round-trips? (apply string-append (map (lambda (_) "0123456789abcdef") (range 0 512)))))
 
 ;; --- malformed input is rejected, not panicked -----------------------------
 (check-err? "dec empty input" (bencode-decode-bytes (string->bytes "")))

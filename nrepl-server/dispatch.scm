@@ -18,6 +18,7 @@
 ;;   new-session  clone result; sessions: ls-sessions result; ops/versions: describe
 
 (require "session.scm")
+(require "version.scm")
 
 (provide dispatch server-ops)
 
@@ -86,9 +87,9 @@
 ;; versions: a map of name -> {string -> string} (Q4 — the client only needs the
 ;; type to fit; values are informational).
 (define describe-versions
-  (hash "nrepl-steel" (hash "version-string" "0.2.0")
+  (hash "nrepl-steel" (hash "version-string" nrepl-steel-version)
     "steel"
-    (hash "version-string" "0.8.2")))
+    (hash "version-string" steel-version-string)))
 
 (define (op-describe reg req)
   (list (respond req (hash "ops" describe-ops
@@ -188,6 +189,7 @@
 (define (op-interrupt reg req)
   (define session (hash-try-get req "session"))
   (cond
-    [(and session (not (registry-get reg session)))
+    [(not session) (list (respond req (hash "status" (done-status "error" "no-session"))))]
+    [(not (registry-get reg session))
       (list (respond req (hash "status" (done-status "error" "unknown-session"))))]
     [else (list (respond req (hash "status" (done-status "session-idle"))))]))

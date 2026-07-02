@@ -36,7 +36,9 @@ const DRAIN_RESET: &str = "(let ((o (get-output-string __out)) \
 /// FFI requires of opaque customs (steel built with `sync`), and so the server's
 /// per-connection threads serialise access to a session's engine through the
 /// lock. In normal single-client use the lock is uncontended: a session is only
-/// ever touched by the one connection thread that owns it.
+/// ever touched by the one connection thread that owns it. A poisoned lock is
+/// recovered with `into_inner` rather than unwrapped: a panic here would cross
+/// the `abi_stable` FFI boundary and abort the host process.
 pub struct SteelEngine {
     inner: Arc<Mutex<Engine>>,
 }
@@ -59,7 +61,10 @@ impl SteelEngine {
     /// expects: `status` ("ok"|"error"), `values` (list of rendered value
     /// strings, void dropped), `out`, `err`, and `ex` (string on error, else #f).
     pub fn eval(&self, code: String) -> HashMap<String, FFIValue> {
-        let mut engine = self.inner.lock().unwrap();
+        let mut engine = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = engine.compile_and_run_raw_program(code);
         // Drain + reset the capture ports regardless of whether the eval threw.
         let (out, err) = engine
@@ -101,7 +106,10 @@ impl SteelEngine {
     /// `(name type)` pair. Enumerating the global symbol table is the one
     /// capability with no Scheme-level equivalent — the reason this dylib exists.
     pub fn globals(&self, prefix: &str) -> Vec<FFIValue> {
-        let engine = self.inner.lock().unwrap();
+        let engine = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut pairs: Vec<(String, &'static str)> = engine
             .readable_globals(0)
             .iter()
@@ -132,7 +140,10 @@ impl SteelEngine {
     /// Arity comes from the engine's own `arity?`; Steel does not store parameter
     /// names, so the arglist is synthesised positionally from the arity count.
     pub fn symbol_info(&self, sym: String) -> Option<HashMap<String, FFIValue>> {
-        let mut engine = self.inner.lock().unwrap();
+        let mut engine = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let value = engine.extract_value(&sym).ok()?;
         let ty = type_of(&value);
         let doc = doc_for(&mut engine, &value);

@@ -42,6 +42,13 @@ jobs:
             asset_name: libnrepl_steel_engine-x86_64-linux.so
             built_name: libnrepl_steel_engine.so
 
+          # Linux — aarch64 (GNU, native on the arm64 runner)
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: aarch64-linux
+            asset_name: libnrepl_steel_engine-aarch64-linux.so
+            built_name: libnrepl_steel_engine.so
+
           # Windows — x86_64 (MSVC)
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -97,16 +104,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Verify cog.scm version matches the tag
+      - name: Verify all version sources match the tag
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
+          # The version lives in three places; a release must not ship with any
+          # of them stale (describe drifted to 0.2.0 while 0.2.4 was released).
           cog_version="$(grep -E '^\(define version ' cog.scm | sed -E 's/.*"([^"]+)".*/\1/')"
-          if [ "$tag" != "$cog_version" ]; then
-            echo "::error::tag v$tag does not match cog.scm version $cog_version" >&2
-            exit 1
-          fi
-          echo "cog.scm version $cog_version matches tag v$tag"
+          scm_version="$(grep -E '^\(define nrepl-steel-version ' nrepl-server/version.scm | sed -E 's/.*"([^"]+)".*/\1/')"
+          cargo_version="$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          fail=0
+          for pair in "cog.scm:$cog_version" \
+                      "nrepl-server/version.scm:$scm_version" \
+                      "Cargo.toml:$cargo_version"; do
+            file="${pair%%:*}"
+            version="${pair#*:}"
+            if [ "$tag" != "$version" ]; then
+              echo "::error::tag v$tag does not match $file version '$version'" >&2
+              fail=1
+            else
+              echo "$file version $version matches tag v$tag"
+            fi
+          done
+          [ "$fail" -eq 0 ] || exit 1
           # Forge reads cog.scm as data (no evaluation), so the dylib URLs are
           # literal strings that must be bumped by hand. Guard against drift:
           # every release-download URL must carry the tag being released.

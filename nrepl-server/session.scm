@@ -8,7 +8,10 @@
 ;; Concurrency note: this registry is synchronous. Per-session serialization of evals
 ;; and the worker-thread/channel model are layered on at the server loop (Phase 6) —
 ;; and that choice is reopened by the interrupt findings (see spike-interrupt.md), so
-;; it is kept out of this module rather than baked in here.
+;; it is kept out of this module rather than baked in here. The table itself IS shared
+;; across connection threads, though, so the two read-modify-write mutations (clone,
+;; close) take the registry lock — without it, concurrent clones from two connections
+;; can lose an entry (the immutable-hash swap drops one insert).
 
 (require "evaluator.scm")
 (require-builtin steel/random)
@@ -26,10 +29,19 @@
   Session-state)
 
 (struct Session (id state))
-(struct Registry (evaluator table) #:mutable)
+(struct Registry (evaluator table lock) #:mutable)
 
 ;; A registry is created with the evaluator backend to use for every session.
-(define (make-registry evaluator) (Registry evaluator (hash)))
+(define (make-registry evaluator) (Registry evaluator (hash) (mutex)))
+
+;; Run `thunk` holding the registry lock. NB: lock-acquire! returns a guard;
+;; lock-release! takes that guard (not the mutex) — same pattern as make-writer.
+(define (with-registry-lock reg thunk)
+  (define guard (lock-acquire! (Registry-lock reg)))
+  (dynamic-wind
+    (lambda () void)
+    thunk
+    (lambda () (lock-release! guard))))
 
 ;; --- session ids -----------------------------------------------------------
 ;; nREPL session ids are opaque strings to the client; we mint UUID-shaped ones from
@@ -53,7 +65,9 @@
 (define (registry-clone! reg)
   (define state ((Evaluator-init (Registry-evaluator reg))))
   (define id (gen-session-id))
-  (set-Registry-table! reg (hash-insert (Registry-table reg) id (Session id state)))
+  (with-registry-lock reg
+    (lambda ()
+      (set-Registry-table! reg (hash-insert (Registry-table reg) id (Session id state)))))
   id)
 
 (define (registry-get reg id)
@@ -86,7 +100,9 @@
   (define s (registry-get reg id))
   (cond
     [s ((Evaluator-close (Registry-evaluator reg)) (Session-state s))
-      (set-Registry-table! reg (hash-remove (Registry-table reg) id))
+      (with-registry-lock reg
+        (lambda ()
+          (set-Registry-table! reg (hash-remove (Registry-table reg) id))))
       #t]
     [else #f]))
 

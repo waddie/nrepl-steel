@@ -128,15 +128,20 @@
       [(digit-byte? b) (loop (cons b acc))]
       [else (error "bencode-decode: invalid byte in string length" b)])))
 
+;; Accumulate into a mutable bytevector rather than a cons list: string bodies are the
+;; only unbounded payload (up to the cap), and a list would cost one cell per byte.
 (define (read-n-bytes->string ip n)
   (when (> n MAX-STRING-LENGTH) (error "bencode-decode: string length exceeds cap" n))
-  (let loop ([i 0] [acc '()])
+  (define buf (bytes))
+  (let loop ([i 0])
     (if (= i n)
-      (rev-bytes->string acc)
+      (bytes->string/utf8 buf)
       (let ([b (read-byte ip)])
         (if (eof-object? b)
           (error "bencode-decode: truncated string body")
-          (loop (+ i 1) (cons b acc)))))))
+          (begin
+            (bytes-push! buf b)
+            (loop (+ i 1))))))))
 
 (define (dec-list ip)
   (read-byte ip) ; consume 'l'
