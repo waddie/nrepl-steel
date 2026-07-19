@@ -31,7 +31,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-steel nrepl-steel.scm "$ADDR" >"$SRV_LOG" 2>&1 &
+# --no-port-file: the harness knows its own address, and a test run must not drop a
+# .nrepl-port into the repo root where it would advertise a server that is about to die.
+steel nrepl-steel.scm "$ADDR" --no-port-file >"$SRV_LOG" 2>&1 &
 SRV_PID=$!
 
 # Wait for the server to announce it is listening (up to ~5s).

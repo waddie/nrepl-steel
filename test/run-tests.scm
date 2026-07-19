@@ -12,6 +12,7 @@
 ;; --- suites ---------------------------------------------------------------
 ;; Add a (require "<module>-test.scm") line per module as suites land. Tests run
 ;; in the order they are registered, so this list also fixes suite order.
+(require "cli-test.scm")
 (require "bencode-test.scm")
 (require "transport-test.scm")
 (require "session-test.scm")

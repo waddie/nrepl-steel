@@ -62,6 +62,7 @@ forge install /path/to/nrepl-steel
 ```sh
 nrepl-steel                         # listens on 127.0.0.1:7888
 nrepl-steel 127.0.0.1:9000          # or pass host:port
+nrepl-steel --no-port-file          # don't write .nrepl-port
 ```
 
 Or from a checkout, without installing:
@@ -72,6 +73,22 @@ steel nrepl-steel.scm 127.0.0.1:9000
 ```
 
 It prints the listen address and parks until interrupted (Ctrl-C).
+
+### The `.nrepl-port` file
+
+On a successful bind the server writes the port to `.nrepl-port` in the current
+directory. This is the convention nREPL tooling uses to find a running server without
+being told its port: clients search the working directory and its ancestors. Clients
+that rely on it, such as [nautilos](https://github.com/waddie/nautilos) and CIDER,
+cannot reach the server without it.
+
+Add `.nrepl-port` to `.gitignore` — it is machine-local state. Pass `--no-port-file` to
+suppress the write, for instance when running a throwaway server inside a checkout.
+
+The file is not removed on shutdown. Steel exposes no signal handler, so a `Ctrl-C`'d
+server never gets to clean up and leaves the file behind, the same way a `kill -9`'d
+Clojure nREPL does. A client that picks up a stale file gets connection-refused against
+the dead port; starting a new server overwrites it.
 
 ### Connecting an editor
 
