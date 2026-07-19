@@ -29,13 +29,34 @@
   server-stop!
   server-addr
   server-registry
+  normalize-addr
   serve-loop
   server-error-response)
 
 (struct Server (addr listener registry running) #:mutable)
 
+;; "localhost:7888" -> "127.0.0.1:7888".
+;;
+;; tcp-listen is TcpListener::bind, which binds the FIRST address the string resolves to
+;; and stops. On macOS "localhost" resolves ::1 ahead of 127.0.0.1, so "localhost:7888"
+;; listens on IPv6 loopback ONLY and every IPv4 client gets connection-refused. Clients
+;; that connect by hostname survive it (they try each resolved address), which is why
+;; nrepl.hx never noticed; clients that connect to a literal 127.0.0.1, such as nautilos,
+;; cannot reach the server at all.
+;;
+;; It also breaks .nrepl-port, which carries a port and no host: every client reading it
+;; assumes IPv4 loopback, so an IPv6-only server advertises an address it is not
+;; listening on. Binding 127.0.0.1 for "localhost" keeps the file honest and matches
+;; what Clojure's nREPL binds by default. An explicitly bracketed host ("[::1]:7888")
+;; contains no "localhost:" prefix and is passed through untouched, so asking for IPv6
+;; still works.
+(define (normalize-addr a)
+  (if (starts-with? a "localhost:")
+    (string-append "127.0.0.1:" (trim-start-matches a "localhost:"))
+    a))
+
 (define (make-server addr)
-  (Server addr #f (make-registry (make-native-evaluator)) #f))
+  (Server (normalize-addr addr) #f (make-registry (make-native-evaluator)) #f))
 
 (define (server-addr s) (Server-addr s))
 (define (server-registry s) (Server-registry s))

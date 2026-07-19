@@ -20,9 +20,11 @@
 
 ;; Bind first: server-start! raises if the address is in use, so a failed start never
 ;; leaves a .nrepl-port advertising a server that is not listening.
-(server-start! (make-server addr))
+(define server (server-start! (make-server addr)))
 (when (cli-write-port-file? (command-line)) (write-port-file! addr))
-(displayln (string-append "nREPL server listening on " addr))
+;; Report the bound address, not the requested one: make-server rewrites "localhost" to
+;; 127.0.0.1, and the message must not claim an address the server is not listening on.
+(displayln (string-append "nREPL server listening on " (server-addr server)))
 (flush-output-port (current-output-port))
 
 (let loop ()

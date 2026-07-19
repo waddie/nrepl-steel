@@ -94,3 +94,30 @@
       (is (= "s-9" (hash-ref e "session")) "echoes the session")
       (is (and (member "server-error" (hash-ref e "status")) #t)
         "carries the server-error status"))))
+
+;; "localhost" must not reach tcp-listen: it resolves ::1 first on macOS, so the server
+;; would bind IPv6 loopback only and every client connecting to a literal 127.0.0.1
+;; (nautilos among them) would get connection-refused against a .nrepl-port that claims
+;; otherwise.
+(deftest normalize-addr-test
+  (testing "listen address normalisation"
+    (is (= "127.0.0.1:7888" (normalize-addr "localhost:7888"))
+      "rewrites localhost to the IPv4 loopback literal")
+    (is (= "127.0.0.1:7888" (normalize-addr "127.0.0.1:7888"))
+      "leaves an IPv4 literal alone")
+    (is (= "0.0.0.0:7888" (normalize-addr "0.0.0.0:7888"))
+      "leaves a wildcard bind alone")
+    ;; An explicit bracketed host is a deliberate request for IPv6, so it must survive.
+    (is (= "[::1]:7888" (normalize-addr "[::1]:7888"))
+      "leaves an explicit IPv6 host alone")
+    ;; Only a host-position match counts; a host that merely ends in "localhost" is a
+    ;; different name and must not be rewritten.
+    (is (= "mylocalhost:7888" (normalize-addr "mylocalhost:7888"))
+      "does not rewrite a host that only ends in localhost")))
+
+(deftest make-server-normalizes-addr-test
+  ;; The rewrite has to happen at construction, since server-start! and server-stop!
+  ;; both read the address back off the struct.
+  (testing "make-server"
+    (is (= "127.0.0.1:7888" (server-addr (make-server "localhost:7888")))
+      "stores the normalised address")))

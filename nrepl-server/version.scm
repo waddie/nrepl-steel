@@ -6,7 +6,7 @@
 
 (provide nrepl-steel-version steel-version-string)
 
-(define nrepl-steel-version "0.2.7")
+(define nrepl-steel-version "0.2.8")
 
 ;; The Steel runtime version. Tracks the steel-core pin in the root Cargo.toml
 ;; (the git rev the installed `steel 0.8.2` was built from).

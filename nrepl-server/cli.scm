@@ -46,7 +46,7 @@
 ;; bind, so a failed start never advertises a server that is not listening.
 ;;
 ;; Best-effort: an unwritable cwd is reported but must not take down a server that has
-;; already bound. Overwrites any existing file — a leftover from a killed server is
+;; already bound. Overwrites any existing file: a leftover from a killed server is
 ;; exactly what wants replacing, and Steel has no signal handler with which to have
 ;; removed it.
 (define (write-port-file! addr)

@@ -80,25 +80,10 @@ On a successful bind the server writes the port to `.nrepl-port` in the current
 directory. This is the convention nREPL tooling uses to find a running server without
 being told its port: clients search the working directory and its ancestors. Clients
 that rely on it, such as [nautilos](https://github.com/waddie/nautilos) and CIDER,
-cannot reach the server without it.
+cannot reach the server without it. Pass `--no-port-file` to suppress the write.
 
-Add `.nrepl-port` to `.gitignore` — it is machine-local state. Pass `--no-port-file` to
-suppress the write, for instance when running a throwaway server inside a checkout.
-
-The file is not removed on shutdown. Steel exposes no signal handler, so a `Ctrl-C`'d
-server never gets to clean up and leaves the file behind, the same way a `kill -9`'d
-Clojure nREPL does. A client that picks up a stale file gets connection-refused against
-the dead port; starting a new server overwrites it.
-
-### Connecting an editor
-
-Point an nREPL client at the address. With
-[nrepl.hx](https://github.com/waddie/nrepl.hx) in
-[Helix](https://helix-editor.com/):
-
-```
-:nrepl-connect localhost:7888
-```
+The file is not removed on shutdown. Steel exposes no signal handler, so a `Ctrl-C`’d
+server never gets to clean up and leaves the file behind.
 
 ## License
 
