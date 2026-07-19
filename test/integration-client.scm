@@ -3,135 +3,167 @@
 ;;
 ;;   steel test/integration-client.scm [host:port]      (default 127.0.0.1:7899)
 ;;
-;; This is the Phase 7 acceptance gate. nrepl.hx itself only runs interactively inside
-;; Helix and exposes no headless harness (its nrepl-rs client is an async Rust lib), so
-;; this script stands in for it: it speaks the exact wire protocol nrepl-rs speaks
-;; (bencode dicts; correlate by id; act on the `status` token set; `file` = contents for
+;; This is the acceptance gate. nrepl.hx itself only runs interactively inside Helix
+;; and exposes no headless harness (its nrepl-rs client is an async Rust lib), so this
+;; script stands in for it: it speaks the exact wire protocol nrepl-rs speaks (bencode
+;; dicts; correlate by id; act on the `status` token set; `file` = contents for
 ;; load-file) and exercises clone -> eval (incl. def-then-use) -> out -> error ->
 ;; load-file -> ls-sessions -> interrupt -> session isolation -> close.
 ;;
 ;; MUST run as its own process: a client sharing the server's Steel runtime deadlocks on
-;; the request/response loop. The harness raises on any failed assertion, so the process
+;; the request/response loop. run-tests! raises on any failed assertion, so the process
 ;; exits non-zero for the orchestrator.
-
-(require "harness.scm")
+;;
+;; The tests run in definition order against one connection and one session, so the
+;; later tests see the definitions the earlier ones made.
+(require "steel-test/test.scm")
+(require "responses.scm")
 (require "../nrepl-server/transport.scm")
 (require-builtin steel/tcp)
 
 (define (addr-from-args)
-  (define args (command-line))
-  (if (>= (length args) 3) (list-ref args 2) "127.0.0.1:7899"))
+  (let ([args (command-line)])
+    (if (>= (length args) 3) (list-ref args 2) "127.0.0.1:7899")))
 
 ;; Send one request and collect responses until the one carrying "done" in `status`.
 (define (req! rd wr m)
   (write-message wr m)
   (let loop ([acc '()])
-    (define r (read-message rd))
-    (define acc* (cons r acc))
-    (if (and (hash? r) (hash-contains? r "status") (member "done" (hash-ref r "status")))
-      (reverse acc*)
-      (loop acc*))))
-
-;; Collect the value of `key` from every response in `resps` that carries it.
-(define (collect resps key)
-  (filter (lambda (x) (not (equal? x 'none)))
-    (map (lambda (r) (if (hash-contains? r key) (hash-ref r key) 'none)) resps)))
-(define (last-of xs) (if (null? (cdr xs)) (car xs) (last-of (cdr xs))))
-(define (final-status resps) (hash-ref (last-of resps) "status"))
-(define (has-token? resps tok) (and (member tok (final-status resps)) #t))
+    (let ([r (read-message rd)])
+      (if (and (hash? r) (hash-contains? r "status") (member "done" (hash-ref r "status")))
+        (reverse (cons r acc))
+        (loop (cons r acc))))))
 
 ;; --- connect ---------------------------------------------------------------
-(define addr (addr-from-args))
-(define c (tcp-connect addr))
+(define c (tcp-connect (addr-from-args)))
 (define rd (tcp-stream-buffered-reader c))
 (define wr (tcp-stream-writer c))
 
-;; --- describe (nrepl.hx sends this first on connect) -----------------------
-(define desc (req! rd wr (hash "op" "describe" "id" "d1")))
-(check-true "describe: advertises eval + load-file"
-  (let ([ops (hash-ref (car desc) "ops")])
-    (and (hash-contains? ops "eval") (hash-contains? ops "load-file"))))
-(check-true "describe: has versions" (hash-contains? (car desc) "versions"))
+;; Close the socket once the whole suite has run, before run-tests! raises on failure.
+(use-fixtures 'once
+  (lambda (run)
+    (run)
+    (tcp-shutdown! c)))
 
-;; --- clone -----------------------------------------------------------------
+;; describe is what nrepl.hx sends first on connect; clone gives us the session the
+;; rest of the suite works in.
+(define desc (req! rd wr (hash "op" "describe" "id" "d1")))
 (define cl (req! rd wr (hash "op" "clone" "id" "1")))
 (define sid (hash-ref (car cl) "new-session"))
-(check-true "clone: new-session is a string" (string? sid))
 
-;; --- eval: value -----------------------------------------------------------
-(define ev (req! rd wr (hash "op" "eval" "id" "2" "session" sid "code" "(+ 40 2)")))
-(check-equal? "eval: value" (collect ev "value") (list "42"))
-(check-equal? "eval: echoes session" (hash-ref (last-of ev) "session") sid)
+(deftest wire-describe-test
+  (testing "describe over the wire"
+    (is (let ([ops (hash-ref (car desc) "ops")])
+         (and (hash-contains? ops "eval") (hash-contains? ops "load-file")))
+      "advertises eval + load-file")
+    (is (hash-contains? (car desc) "versions") "reports versions")))
 
-;; --- eval: define then use it (state persistence) --------------------------
-(req! rd wr (hash "op" "eval" "id" "3" "session" sid "code" "(define answer 7)"))
-(define ev3 (req! rd wr (hash "op" "eval" "id" "4" "session" sid "code" "answer")))
-(check-equal? "eval: defs persist across evals" (collect ev3 "value") (list "7"))
+(deftest wire-clone-test
+  (testing "clone over the wire"
+    (is (string? sid) "new-session is a string")))
 
-;; --- eval: captured stdout -------------------------------------------------
-(define evo (req! rd wr (hash "op" "eval" "id" "5" "session" sid "code" "(display \"hi\")")))
-(check-equal? "eval: out captured" (collect evo "out") (list "hi"))
+(deftest wire-eval-test
+  (testing "eval over the wire"
+    (testing "returning a value"
+      (let ([ev (req! rd wr (hash "op" "eval" "id" "2" "session" sid "code" "(+ 40 2)"))])
+        (is (= (list "42") (collect ev "value")))
+        (is (= sid (hash-ref (last-of ev) "session")) "echoes the session")))
+    (testing "defining then using"
+      (req! rd wr (hash "op" "eval" "id" "3" "session" sid "code" "(define answer 7)"))
+      (is (= (list "7")
+           (collect (req! rd wr (hash "op" "eval" "id" "4" "session" sid "code" "answer"))
+             "value"))
+        "defs persist across evals"))
+    (testing "writing to stdout"
+      (is (= (list "hi")
+           (collect (req! rd wr (hash "op" "eval" "id" "5" "session" sid
+                                 "code"
+                                 "(display \"hi\")"))
+             "out"))
+        "output is captured"))
+    (testing "raising"
+      (let ([eve (req! rd wr (hash "op" "eval" "id" "6" "session" sid "code" "(car '())"))])
+        (is (has-token? eve "eval-error"))
+        (is (string? (hash-ref (last-of eve) "ex")) "ex is present")
+        (is (= '() (collect eve "value")) "no value is reported")))))
 
-;; --- eval: error -> eval-error + ex ----------------------------------------
-(define eve (req! rd wr (hash "op" "eval" "id" "6" "session" sid "code" "(car '())")))
-(check-true "eval error: eval-error token" (has-token? eve "eval-error"))
-(check-true "eval error: ex present" (string? (hash-ref (last-of eve) "ex")))
-(check-equal? "eval error: no value" (collect eve "value") '())
+(deftest wire-load-file-test
+  (testing "load-file over the wire"
+    ;; Five pairs, so this one must go through `dict` (see responses.scm). `file-name`
+    ;; is accepted and ignored by the server; it rides along to prove that.
+    (is (= (list "22")
+         (collect (req! rd wr (dict (list "op" "load-file" "id" "7" "session" sid
+                                     "file"
+                                     "(define from-file 11)\n(* from-file 2)"
+                                     "file-name"
+                                     "scratch.scm")))
+           "value"))
+      "reports the value of the last form")
+    (is (= (list "11")
+         (collect (req! rd wr (hash "op" "eval" "id" "8" "session" sid "code" "from-file"))
+           "value"))
+      "its defs persist")))
 
-;; --- load-file -------------------------------------------------------------
-(define lf (req! rd wr (hash "op" "load-file" "id" "7" "session" sid
-                        "file"
-                        "(define from-file 11)\n(* from-file 2)"
-                        "file-name"
-                        "scratch.scm")))
-(check-equal? "load-file: value of last form" (collect lf "value") (list "22"))
-(define lfp (req! rd wr (hash "op" "eval" "id" "8" "session" sid "code" "from-file")))
-(check-equal? "load-file: defs persist" (collect lfp "value") (list "11"))
+(deftest wire-ls-sessions-test
+  (testing "ls-sessions over the wire"
+    (is (and (member sid
+              (hash-ref (car (req! rd wr (hash "op" "ls-sessions" "id" "9"))) "sessions"))
+         #t)
+      "lists our session")))
 
-;; --- ls-sessions -----------------------------------------------------------
-(define ls (req! rd wr (hash "op" "ls-sessions" "id" "9")))
-(check-true "ls-sessions: lists our session"
-  (and (member sid (hash-ref (car ls) "sessions")) #t))
+(deftest wire-completions-test
+  (testing "completions over the wire"
+    (let ([cmp (req! rd wr (hash "op" "completions" "id" "c1" "session" sid
+                            "prefix"
+                            "from-"))])
+      (is (and (member "from-file"
+                (map (lambda (x) (hash-ref x "candidate")) (hash-ref (car cmp) "completions")))
+           #t)
+        "from-file is a candidate")
+      (is (hash-contains? (car (hash-ref (car cmp) "completions")) "type")
+        "candidates carry a type"))))
 
-;; --- completions (over the wire: list of candidate dicts) ------------------
-(define cmp (req! rd wr (hash "op" "completions" "id" "c1" "session" sid "prefix" "from-")))
-(check-true "completions: from-file is a candidate"
-  (let ([names (map (lambda (c) (hash-ref c "candidate")) (hash-ref (car cmp) "completions"))])
-    (and (member "from-file" names) #t)))
-(check-true "completions: candidates carry a type"
-  (hash-contains? (car (hash-ref (car cmp) "completions")) "type"))
+(deftest wire-lookup-test
+  (testing "lookup over the wire"
+    (let ([lk (req! rd wr (hash "op" "lookup" "id" "k1" "session" sid "sym" "map"))])
+      (is (= "map" (hash-ref (hash-ref (car lk) "info") "name"))
+        "the info dict names the symbol")
+      (is (string? (hash-ref (hash-ref (car lk) "info") "doc")) "the info carries a doc"))
+    (is (has-token? (req! rd wr (hash "op" "lookup" "id" "k2" "session" sid
+                                 "sym"
+                                 "no-such-symbol-xyz"))
+         "no-info")
+      "an unbound symbol reports no-info")))
 
-;; --- lookup / info (over the wire: nested info dict) -----------------------
-(define lk (req! rd wr (hash "op" "lookup" "id" "k1" "session" sid "sym" "map")))
-(check-true "lookup: info dict names the symbol"
-  (equal? (hash-ref (hash-ref (car lk) "info") "name") "map"))
-(check-true "lookup: info carries a doc string"
-  (string? (hash-ref (hash-ref (car lk) "info") "doc")))
-(define lku (req! rd wr (hash "op" "lookup" "id" "k2" "session" sid "sym" "no-such-symbol-xyz")))
-(check-true "lookup: unbound symbol -> no-info" (has-token? lku "no-info"))
+(deftest wire-interrupt-test
+  ;; Queued-only, so an idle session is all we can assert over the wire.
+  (testing "interrupt over the wire"
+    (is (has-token? (req! rd wr (hash "op" "interrupt" "id" "10" "session" sid))
+         "session-idle")
+      "an idle session reports session-idle")))
 
-;; --- interrupt (queued-only: an idle session reports session-idle) ---------
-(define intr (req! rd wr (hash "op" "interrupt" "id" "10" "session" sid)))
-(check-true "interrupt: idle session" (has-token? intr "session-idle"))
+(deftest wire-session-isolation-test
+  (testing "a second session over the wire"
+    (let ([sid2 (hash-ref (car (req! rd wr (hash "op" "clone" "id" "11"))) "new-session")])
+      (is (not (equal? sid sid2)) "has a distinct id")
+      ;; `answer` was defined in sid only, so referencing it in sid2 must raise.
+      (is (has-token? (req! rd wr (hash "op" "eval" "id" "12" "session" sid2
+                                   "code"
+                                   "answer"))
+           "eval-error")
+        "does not see sid's defs"))))
 
-;; --- a second session is isolated ------------------------------------------
-(define cl2 (req! rd wr (hash "op" "clone" "id" "11")))
-(define sid2 (hash-ref (car cl2) "new-session"))
-(check-true "clone: second session has a distinct id" (not (equal? sid sid2)))
-;; `answer` was defined in sid only -> referencing it in sid2 must raise.
-(define iso (req! rd wr (hash "op" "eval" "id" "12" "session" sid2 "code" "answer")))
-(check-true "isolation: sid's def is invisible in sid2" (has-token? iso "eval-error"))
+(deftest wire-close-test
+  (testing "close over the wire"
+    (is (has-token? (req! rd wr (hash "op" "close" "id" "13" "session" sid)) "done"))
+    (is (not (member sid
+              (hash-ref (car (req! rd wr (hash "op" "ls-sessions" "id" "14")))
+                "sessions")))
+      "the session is gone from ls-sessions")))
 
-;; --- close -----------------------------------------------------------------
-(define cls (req! rd wr (hash "op" "close" "id" "13" "session" sid)))
-(check-true "close: done" (member "done" (final-status cls)))
-(define ls2 (req! rd wr (hash "op" "ls-sessions" "id" "14")))
-(check-true "close: session gone from ls-sessions"
-  (not (member sid (hash-ref (car ls2) "sessions"))))
+(deftest wire-unknown-op-test
+  (testing "an unknown op over the wire"
+    (is (has-token? (req! rd wr (hash "op" "no-such-op" "id" "15")) "unknown-op")
+      "is reported")))
 
-;; --- unknown op ------------------------------------------------------------
-(define unk (req! rd wr (hash "op" "no-such-op" "id" "15")))
-(check-true "unknown-op: reported" (has-token? unk "unknown-op"))
-
-(tcp-shutdown! c)
-(summary!)
+(run-tests!)

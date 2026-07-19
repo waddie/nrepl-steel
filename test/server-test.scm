@@ -9,10 +9,11 @@
 ;; runtime deadlock on a tight bencode request/response loop — Steel's in-process
 ;; native-thread scheduling starves one side during message I/O (an inter-op flush can
 ;; mask it, but it is not reliable). This is purely an in-process artifact; an external
-;; client (separate process, e.g. nrepl.hx in Phase 7) is unaffected, which is why the
-;; standalone clone+eval-over-socket probes work. So socket-level verification is left
-;; to the manual/Phase-7 external-client path; the suite tests the loop deterministically.
-(require "harness.scm")
+;; client (separate process) is unaffected, which is why the standalone
+;; clone+eval-over-socket probes work. So socket-level verification is left to
+;; test/integration.sh; the suite tests the loop deterministically.
+(require "steel-test/test.scm")
+(require "responses.scm")
 (require "../nrepl-server/server.scm")
 (require "../nrepl-server/session.scm")
 (require "../nrepl-server/evaluator.scm")
@@ -20,11 +21,11 @@
 
 ;; Decode every bencode value from a bytevector into a list.
 (define (decode-all bv)
-  (define in (open-input-bytevector bv))
-  (let loop ([acc '()])
-    (if (eof-object? (peek-byte in))
-      (reverse acc)
-      (loop (cons (bencode-decode in) acc)))))
+  (let ([in (open-input-bytevector bv)])
+    (let loop ([acc '()])
+      (if (eof-object? (peek-byte in))
+        (reverse acc)
+        (loop (cons (bencode-decode in) acc))))))
 
 ;; Concatenate encoded requests into one input stream.
 (define (encode-requests reqs)
@@ -35,16 +36,10 @@
 
 ;; Run serve-loop over an in-memory request stream; return the decoded responses.
 (define (serve reg reqs)
-  (define reader (open-input-bytevector (encode-requests reqs)))
-  (define out (open-output-bytevector))
-  (serve-loop reader (lambda (m) (write-bytes (bencode-encode m) out)) reg)
-  (decode-all (get-output-bytevector out)))
-
-(define (collect resps key)
-  (filter (lambda (x) (not (equal? x 'none)))
-    (map (lambda (r) (if (hash-contains? r key) (hash-ref r key) 'none)) resps)))
-(define (responses-for resps id)
-  (filter (lambda (r) (equal? (hash-try-get r "id") id)) resps))
+  (let ([reader (open-input-bytevector (encode-requests reqs))]
+        [out (open-output-bytevector)])
+    (serve-loop reader (lambda (m) (write-bytes (bencode-encode m) out)) reg)
+    (decode-all (get-output-bytevector out))))
 
 ;; Pre-create a session so requests can reference its id (clone's id is generated).
 (define reg (make-registry (make-native-evaluator)))
@@ -61,35 +56,41 @@
       (hash "op" "ls-sessions" "id" "7")
       (hash "op" "bogus-op" "id" "8"))))
 
-;; The loop answered every request, each terminated by a "done".
-(check-equal? "every request gets a done"
-  (length (filter (lambda (r) (and (hash-contains? r "status")
-                               (member "done" (hash-ref r "status"))))
-           R))
-  8)
+(deftest serve-loop-answers-every-request-test
+  (testing "a batch of 8 requests over serve-loop"
+    (is (= 8 (length (filter (lambda (r) (and (hash-contains? r "status")
+                                          (member "done" (hash-ref r "status"))))
+                      R)))
+      "each one is terminated by a done")))
 
-(check-equal? "eval value over serve-loop" (collect (responses-for R "1") "value") (list "42"))
-(check-equal? "eval state persists over serve-loop" (collect (responses-for R "3") "value") (list "99"))
-(check-equal? "eval out captured over serve-loop" (collect (responses-for R "4") "out") (list "so"))
-(check-true "eval error over serve-loop"
-  (and (member "eval-error" (hash-ref (last (responses-for R "5")) "status")) #t))
-(check-true "describe over serve-loop" (hash-contains? (car (responses-for R "6")) "ops"))
-(check-true "ls-sessions over serve-loop lists session"
-  (and (member sid (hash-ref (car (responses-for R "7")) "sessions")) #t))
-(check-true "unknown-op over serve-loop"
-  (and (member "unknown-op" (hash-ref (car (responses-for R "8")) "status")) #t))
+(deftest serve-loop-op-results-test
+  (testing "over serve-loop"
+    (testing "eval"
+      (is (= (list "42") (collect (responses-for R "1") "value")) "reports a value")
+      (is (= (list "99") (collect (responses-for R "3") "value")) "state persists")
+      (is (= (list "so") (collect (responses-for R "4") "out")) "output is captured")
+      (is (and (member "eval-error" (final-status (responses-for R "5"))) #t)
+        "an error surfaces as eval-error"))
+    (is (hash-contains? (car (responses-for R "6")) "ops") "describe reports ops")
+    (is (and (member sid (hash-ref (car (responses-for R "7")) "sessions")) #t)
+      "ls-sessions lists the session")
+    (is (and (member "unknown-op" (hash-ref (car (responses-for R "8")) "status")) #t)
+      "an unknown op is reported")))
 
-;; A bencode framing error stops the loop cleanly (returns, doesn't loop forever).
-(check-true "serve-loop survives a malformed frame"
-  (let ([reader (open-input-bytevector (string->bytes "xnot-bencode"))]
-        [n (box 0)])
-    (serve-loop reader (lambda (m) (set-box! n (+ 1 (unbox n)))) reg)
-    #t))
+(deftest serve-loop-malformed-frame-test
+  (testing "a bencode framing error"
+    ;; The loop must return rather than spin: bencode desync is unrecoverable, so
+    ;; the connection is dropped.
+    (is (let ([reader (open-input-bytevector (string->bytes "xnot-bencode"))])
+         (serve-loop reader (lambda (m) #t) reg)
+         #t)
+      "stops the loop cleanly")))
 
-;; The handler-bug fallback response echoes id and session so the client can route it.
-(define srv-err
-  (server-error-response (hash "op" "eval" "id" "e1" "session" "s-9") "boom"))
-(check-equal? "server-error-response echoes id" (hash-ref srv-err "id") "e1")
-(check-equal? "server-error-response echoes session" (hash-ref srv-err "session") "s-9")
-(check-true "server-error-response carries server-error status"
-  (and (member "server-error" (hash-ref srv-err "status")) #t))
+(deftest server-error-response-test
+  ;; The handler-bug fallback echoes id and session so the client can still route it.
+  (testing "server-error-response"
+    (let ([e (server-error-response (hash "op" "eval" "id" "e1" "session" "s-9") "boom")])
+      (is (= "e1" (hash-ref e "id")) "echoes the id")
+      (is (= "s-9" (hash-ref e "session")) "echoes the session")
+      (is (and (member "server-error" (hash-ref e "status")) #t)
+        "carries the server-error status"))))

@@ -16,6 +16,14 @@ cd "$(dirname "$0")/.."
 ADDR="${1:-127.0.0.1:7899}"
 SRV_LOG="$(mktemp -t nrepl-steel-server.XXXXXX)"
 
+# The client's assertions are written against the steel-test cog (test-only dependency,
+# so not in cog.scm's `dependencies`).
+if [ ! -f "${STEEL_HOME:-$HOME/.steel}/cogs/steel-test/test.scm" ]; then
+  echo "integration.sh: steel-test is not installed in ${STEEL_HOME:-$HOME/.steel}/cogs." >&2
+  echo "  install it with: forge pkg install --git https://github.com/waddie/steel-test" >&2
+  exit 1
+fi
+
 cleanup() {
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true
   [ -n "$SRV_PID" ] && wait "$SRV_PID" 2>/dev/null || true

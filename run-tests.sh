@@ -10,6 +10,15 @@ cd "$(dirname "$0")"
 # it via (#%require-dylib ...). Build + install it first (debug = fast compile).
 ./build.sh --debug
 
+# The suite is written against the steel-test cog, which must be installed in
+# $STEEL_HOME/cogs. It is a test-only dependency, so it is deliberately absent from
+# cog.scm's `dependencies` (which would foist it on every consumer of the server).
+if [ ! -f "${STEEL_HOME:-$HOME/.steel}/cogs/steel-test/test.scm" ]; then
+  echo "run-tests.sh: steel-test is not installed in ${STEEL_HOME:-$HOME/.steel}/cogs." >&2
+  echo "  install it with: forge pkg install --git https://github.com/waddie/steel-test" >&2
+  exit 1
+fi
+
 if command -v timeout >/dev/null 2>&1; then
   exec timeout 120 steel test/run-tests.scm
 elif command -v gtimeout >/dev/null 2>&1; then

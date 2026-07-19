@@ -2,163 +2,186 @@
 ;; Feeds synthetic request dicts through dispatch and asserts the response dicts.
 ;; Uses the real registry+evaluator (in-process, fast) so this also integration-tests
 ;; the dispatch -> session -> evaluator path at the dict level. No socket.
-(require "harness.scm")
+;;
+;; One registry and one session are built at load time and shared; the tests run in
+;; definition order, so the session is live until the close test at the end.
+(require "steel-test/test.scm")
+(require "responses.scm")
 (require "../nrepl-server/evaluator.scm")
 (require "../nrepl-server/session.scm")
 (require "../nrepl-server/dispatch.scm")
 (require "../nrepl-server/version.scm")
 
 (define reg (make-registry (make-native-evaluator)))
-
-;; --- helpers ---------------------------------------------------------------
-(define (last-of xs) (if (null? (cdr xs)) (car xs) (last-of (cdr xs))))
-(define (terminator resps) (last-of resps))
-(define (status resps) (hash-ref (terminator resps) "status"))
-;; collect the value of `key` from every response that carries it
-(define (collect resps key)
-  (filter (lambda (x) (not (equal? x 'none)))
-    (map (lambda (r) (if (hash-contains? r key) (hash-ref r key) 'none)) resps)))
-(define (has-token? resps tok) (and (member tok (status resps)) #t))
-
-;; --- clone -----------------------------------------------------------------
 (define clone-resps (dispatch reg (hash "op" "clone" "id" "1")))
-(check-equal? "clone: one response" (length clone-resps) 1)
-(check-equal? "clone: echoes id" (hash-ref (car clone-resps) "id") "1")
-(check-true "clone: new-session is a string"
-  (string? (hash-ref (car clone-resps) "new-session")))
-(check-true "clone: done" (has-token? clone-resps "done"))
-
 (define sid (hash-ref (car clone-resps) "new-session"))
-
-;; --- describe --------------------------------------------------------------
 (define desc (dispatch reg (hash "op" "describe" "id" "d1")))
-(check-true "describe: advertises all server ops"
-  (let ([ops (hash-ref (car desc) "ops")])
-    (and (hash-contains? ops "clone") (hash-contains? ops "eval")
-      (hash-contains? ops "describe")
-      (hash-contains? ops "close")
-      (hash-contains? ops "ls-sessions")
-      (hash-contains? ops "interrupt"))))
-(check-true "describe: advertises load-file"
-  (hash-contains? (hash-ref (car desc) "ops") "load-file"))
-(check-true "describe: has versions" (hash-contains? (car desc) "versions"))
-;; Guards the version.scm require wiring — describe must report the single-sourced
-;; version, not a literal that can drift.
-(check-equal? "describe: nrepl-steel version-string is single-sourced"
-  (hash-ref (hash-ref (hash-ref (car desc) "versions") "nrepl-steel") "version-string")
-  nrepl-steel-version)
-(check-true "describe: done" (has-token? desc "done"))
+(define desc-ops (hash-ref (car desc) "ops"))
 
-;; --- eval: value -----------------------------------------------------------
-(define ev (dispatch reg (hash "op" "eval" "id" "2" "session" sid "code" "(+ 1 2)")))
-(check-equal? "eval: value present" (collect ev "value") (list "3"))
-(check-equal? "eval: echoes session" (hash-ref (terminator ev) "session") sid)
-(check-true "eval: done" (has-token? ev "done"))
-(check-true "eval: not an error" (not (has-token? ev "eval-error")))
+(deftest dispatch-clone-test
+  (testing "clone"
+    (is (= 1 (length clone-resps)) "answers with one response")
+    (is (= "1" (hash-ref (car clone-resps) "id")) "echoes the request id")
+    (is (string? (hash-ref (car clone-resps) "new-session")) "new-session is a string")
+    (is (has-token? clone-resps "done"))))
 
-;; --- eval: output ----------------------------------------------------------
-(define evo (dispatch reg (hash "op" "eval" "id" "3" "session" sid "code" "(display \"hi\")")))
-(check-equal? "eval: out captured" (collect evo "out") (list "hi"))
+(deftest dispatch-describe-test
+  (testing "describe"
+    (testing "advertises the stage-one op set"
+      (is (and (hash-contains? desc-ops "clone")
+           (hash-contains? desc-ops "eval")
+           (hash-contains? desc-ops "describe")
+           (hash-contains? desc-ops "close")
+           (hash-contains? desc-ops "ls-sessions")
+           (hash-contains? desc-ops "interrupt"))
+        "core ops")
+      (is (hash-contains? desc-ops "load-file") "load-file")
+      (is (and (hash-contains? desc-ops "completions")
+           (hash-contains? desc-ops "lookup")
+           (hash-contains? desc-ops "info"))
+        "introspection ops"))
+    (testing "versions"
+      (is (hash-contains? (car desc) "versions") "are reported")
+      ;; Guards the version.scm require wiring — describe must report the
+      ;; single-sourced version, not a literal that can drift.
+      (is (= nrepl-steel-version
+           (hash-ref (hash-ref (hash-ref (car desc) "versions") "nrepl-steel")
+             "version-string"))
+        "nrepl-steel's version is single-sourced"))
+    (is (has-token? desc "done"))))
 
-;; --- eval: error -----------------------------------------------------------
-(define eve (dispatch reg (hash "op" "eval" "id" "4" "session" sid "code" "(car '())")))
-(check-true "eval error: eval-error token" (has-token? eve "eval-error"))
-(check-true "eval error: ex present"
-  (string? (hash-ref (terminator eve) "ex")))
-(check-equal? "eval error: no value" (collect eve "value") '())
+(deftest dispatch-eval-test
+  (testing "eval"
+    (testing "returning a value"
+      (let ([ev (dispatch reg (hash "op" "eval" "id" "2" "session" sid "code" "(+ 1 2)"))])
+        (is (= (list "3") (collect ev "value")))
+        (is (= sid (hash-ref (last-of ev) "session")) "echoes the session")
+        (is (has-token? ev "done"))
+        (is (not (has-token? ev "eval-error")) "is not an error")))
+    (testing "writing to stdout"
+      (is (= (list "hi")
+           (collect (dispatch reg (hash "op" "eval" "id" "3" "session" sid
+                                   "code"
+                                   "(display \"hi\")"))
+             "out"))
+        "output is captured"))
+    (testing "raising"
+      (let ([eve (dispatch reg (hash "op" "eval" "id" "4" "session" sid
+                                "code"
+                                "(car '())"))])
+        (is (has-token? eve "eval-error"))
+        (is (string? (hash-ref (last-of eve) "ex")) "ex is present")
+        (is (= '() (collect eve "value")) "no value is reported")))
+    (testing "without a usable session"
+      (is (has-token? (dispatch reg (hash "op" "eval" "id" "5" "code" "1")) "error")
+        "no session")
+      (is (has-token? (dispatch reg (hash "op" "eval" "id" "6" "session" "nope" "code" "1"))
+           "error")
+        "unknown session"))))
 
-;; --- eval: missing/unknown session ----------------------------------------
-(check-true "eval: no session -> error"
-  (has-token? (dispatch reg (hash "op" "eval" "id" "5" "code" "1")) "error"))
-(check-true "eval: unknown session -> error"
-  (has-token? (dispatch reg (hash "op" "eval" "id" "6" "session" "nope" "code" "1"))
-    "error"))
+(deftest dispatch-load-file-test
+  ;; `file` carries the file contents; multiple forms yield one value per form and
+  ;; definitions persist in the session just like eval.
+  (testing "load-file"
+    (let ([lf (dispatch reg (hash "op" "load-file" "id" "lf1" "session" sid
+                             "file"
+                             "(define lf-a 10)\n(+ lf-a 5)"))])
+      (is (= (list "15") (collect lf "value")) "reports the value of the last form")
+      (is (has-token? lf "done")))
+    (is (= (list "10")
+         (collect (dispatch reg (hash "op" "eval" "id" "lf2" "session" sid "code" "lf-a"))
+           "value"))
+      "its defs persist into a later eval")
+    (testing "rejected requests"
+      (is (has-token? (dispatch reg (hash "op" "load-file" "id" "lf3" "session" sid)) "error")
+        "missing file")
+      (is (has-token? (dispatch reg (hash "op" "load-file" "id" "lf4" "session" "nope"
+                                     "file"
+                                     "1"))
+           "error")
+        "unknown session"))))
 
-;; --- load-file -------------------------------------------------------------
-;; `file` carries the file contents; multiple forms yield one value per form and
-;; definitions persist in the session just like eval.
-(define lf (dispatch reg (hash "op" "load-file" "id" "lf1" "session" sid
-                          "file"
-                          "(define lf-a 10)\n(+ lf-a 5)")))
-(check-equal? "load-file: value of last form" (collect lf "value") (list "15"))
-(check-true "load-file: done" (has-token? lf "done"))
-(check-equal? "load-file: defs persist into a later eval"
-  (collect (dispatch reg (hash "op" "eval" "id" "lf2" "session" sid "code" "lf-a")) "value")
-  (list "10"))
-(check-true "load-file: missing file -> error"
-  (has-token? (dispatch reg (hash "op" "load-file" "id" "lf3" "session" sid)) "error"))
-(check-true "load-file: unknown session -> error"
-  (has-token? (dispatch reg (hash "op" "load-file" "id" "lf4" "session" "nope" "file" "1"))
-    "error"))
+(deftest dispatch-ls-sessions-test
+  (testing "ls-sessions"
+    (is (and (member sid
+              (hash-ref (car (dispatch reg (hash "op" "ls-sessions" "id" "7"))) "sessions"))
+         #t)
+      "lists the open session")))
 
-;; --- ls-sessions -----------------------------------------------------------
-(define ls (dispatch reg (hash "op" "ls-sessions" "id" "7")))
-(check-true "ls-sessions: lists the open session"
-  (and (member sid (hash-ref (car ls) "sessions")) #t))
+(deftest dispatch-completions-test
+  ;; sid has lf-a defined (by the load-file test above), so a "lf" prefix surfaces it.
+  (testing "completions"
+    (let ([cmp (dispatch reg (hash "op" "completions" "id" "c1" "session" sid
+                              "prefix"
+                              "lf"))])
+      (is (has-token? cmp "done"))
+      (is (let ([cands (hash-ref (car cmp) "completions")])
+           (and (list? cands)
+             (> (length cands) 0)
+             (hash-contains? (car cands) "candidate")
+             (hash-contains? (car cands) "type")))
+        "candidate dicts carry candidate + type")
+      (is (and (member "lf-a"
+                (map (lambda (c) (hash-ref c "candidate")) (hash-ref (car cmp) "completions")))
+           #t)
+        "lf-a is among the candidates"))
+    (testing "rejected requests"
+      (is (has-token? (dispatch reg (hash "op" "completions" "id" "c2" "prefix" "x")) "error")
+        "no session")
+      (is (has-token? (dispatch reg (hash "op" "completions" "id" "c3" "session" "nope"
+                                     "prefix"
+                                     "x"))
+           "error")
+        "unknown session"))))
 
-;; --- completions -----------------------------------------------------------
-;; sid has lf-a (from load-file) defined; a "lf" prefix must surface it.
-(define cmp (dispatch reg (hash "op" "completions" "id" "c1" "session" sid "prefix" "lf")))
-(check-true "completions: done" (has-token? cmp "done"))
-(check-true "completions: candidate dicts carry candidate + type"
-  (let ([cands (hash-ref (car cmp) "completions")])
-    (and (list? cands)
-      (> (length cands) 0)
-      (hash-contains? (car cands) "candidate")
-      (hash-contains? (car cands) "type"))))
-(check-true "completions: lf-a is among the candidates"
-  (let ([names (map (lambda (c) (hash-ref c "candidate")) (hash-ref (car cmp) "completions"))])
-    (and (member "lf-a" names) #t)))
-(check-true "completions: no session -> error"
-  (has-token? (dispatch reg (hash "op" "completions" "id" "c2" "prefix" "x")) "error"))
-(check-true "completions: unknown session -> error"
-  (has-token? (dispatch reg (hash "op" "completions" "id" "c3" "session" "nope" "prefix" "x"))
-    "error"))
+(deftest dispatch-lookup-test
+  (testing "lookup"
+    (let ([lk (dispatch reg (hash "op" "lookup" "id" "k1" "session" sid "sym" "map"))])
+      (is (has-token? lk "done"))
+      (is (let ([info (hash-ref (car lk) "info")])
+           (and (hash? info) (equal? (hash-ref info "name") "map")))
+        "returns an info dict naming the symbol")
+      (is (string? (hash-ref (hash-ref (car lk) "info") "doc")) "the info carries a doc"))
+    (is (has-token? (dispatch reg (hash "op" "info" "id" "k2" "session" sid "sym" "map"))
+         "done")
+      "the info op is an alias for lookup")
+    (is (has-token? (dispatch reg (hash "op" "lookup" "id" "k3" "session" sid
+                                   "sym"
+                                   "totally-unbound-xyz"))
+         "no-info")
+      "an unbound symbol reports no-info")
+    (testing "rejected requests"
+      (is (has-token? (dispatch reg (hash "op" "lookup" "id" "k4" "session" sid)) "error")
+        "missing sym")
+      (is (has-token? (dispatch reg (hash "op" "lookup" "id" "k5" "session" "nope"
+                                     "sym"
+                                     "map"))
+           "error")
+        "unknown session"))))
 
-;; --- lookup / info ---------------------------------------------------------
-(define lk (dispatch reg (hash "op" "lookup" "id" "k1" "session" sid "sym" "map")))
-(check-true "lookup: done" (has-token? lk "done"))
-(check-true "lookup: info dict with name"
-  (let ([info (hash-ref (car lk) "info")])
-    (and (hash? info) (equal? (hash-ref info "name") "map"))))
-(check-true "lookup: info has a doc string"
-  (string? (hash-ref (hash-ref (car lk) "info") "doc")))
-(check-true "info op is an alias for lookup"
-  (has-token? (dispatch reg (hash "op" "info" "id" "k2" "session" sid "sym" "map")) "done"))
-(check-true "lookup: unbound symbol -> no-info"
-  (has-token? (dispatch reg (hash "op" "lookup" "id" "k3" "session" sid "sym" "totally-unbound-xyz"))
-    "no-info"))
-(check-true "lookup: missing sym -> error"
-  (has-token? (dispatch reg (hash "op" "lookup" "id" "k4" "session" sid)) "error"))
-(check-true "lookup: unknown session -> error"
-  (has-token? (dispatch reg (hash "op" "lookup" "id" "k5" "session" "nope" "sym" "map")) "error"))
+(deftest dispatch-interrupt-test
+  ;; Queued-only: the synchronous registry is never mid-eval when interrupt lands.
+  (testing "interrupt"
+    (is (has-token? (dispatch reg (hash "op" "interrupt" "id" "8" "session" sid))
+         "session-idle")
+      "an idle session reports session-idle")
+    (is (has-token? (dispatch reg (hash "op" "interrupt" "id" "8b" "session" "nope")) "error")
+      "unknown session")
+    (is (let ([resps (dispatch reg (hash "op" "interrupt" "id" "8c"))])
+         (and (has-token? resps "error") (has-token? resps "no-session")))
+      "no session")))
 
-;; describe now advertises the new ops
-(check-true "describe: advertises completions + lookup + info"
-  (let ([ops (hash-ref (car desc) "ops")])
-    (and (hash-contains? ops "completions") (hash-contains? ops "lookup")
-      (hash-contains? ops "info"))))
+(deftest dispatch-close-test
+  (testing "close"
+    (is (has-token? (dispatch reg (hash "op" "close" "id" "9" "session" sid)) "done"))
+    (is (not (member sid
+              (hash-ref (car (dispatch reg (hash "op" "ls-sessions" "id" "10")))
+                "sessions")))
+      "the session is gone from ls-sessions")))
 
-;; --- interrupt (queued-only; idle in synchronous registry) -----------------
-(check-true "interrupt: idle session"
-  (has-token? (dispatch reg (hash "op" "interrupt" "id" "8" "session" sid))
-    "session-idle"))
-(check-true "interrupt: unknown session -> error"
-  (has-token? (dispatch reg (hash "op" "interrupt" "id" "8b" "session" "nope"))
-    "error"))
-(check-true "interrupt: no session -> error"
-  (let ([resps (dispatch reg (hash "op" "interrupt" "id" "8c"))])
-    (and (has-token? resps "error") (has-token? resps "no-session"))))
-
-;; --- close ----------------------------------------------------------------
-(check-true "close: done" (has-token? (dispatch reg (hash "op" "close" "id" "9" "session" sid))
-                           "done"))
-(check-true "close: session gone from ls"
-  (not (member sid (hash-ref (car (dispatch reg (hash "op" "ls-sessions" "id" "10")))
-                    "sessions"))))
-
-;; --- unknown op ------------------------------------------------------------
-(define unk (dispatch reg (hash "op" "frobnicate" "id" "11")))
-(check-true "unknown-op: unknown-op token" (has-token? unk "unknown-op"))
-(check-true "unknown-op: error token" (has-token? unk "error"))
-(check-equal? "unknown-op: echoes id" (hash-ref (car unk) "id") "11")
+(deftest dispatch-unknown-op-test
+  (testing "an unknown op"
+    (let ([unk (dispatch reg (hash "op" "frobnicate" "id" "11"))])
+      (is (has-token? unk "unknown-op"))
+      (is (has-token? unk "error"))
+      (is (= "11" (hash-ref (car unk) "id")) "echoes the request id"))))
