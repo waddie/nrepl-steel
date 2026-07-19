@@ -1,0 +1,9 @@
+;; Config for the callgraph tool (~/source/callgraph).
+;;
+;;   bb callgraph ~/source/nrepl-steel --strict
+;;
+;; Output lands at callgraph.html in the repo root and is gitignored.
+;;
+;; No :callback-prefixes here: this is a plain Steel project with no editor
+;; event loop, so nothing is invoked from outside the codebase.
+{:exclude [".git/" ".jj/" "target/" "progress_docs/"]}
